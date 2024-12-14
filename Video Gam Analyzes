@@ -1,0 +1,194 @@
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(imputeTS)
+library(shiny)
+library(caret)
+
+
+######find CSV file here and replacee path      https://www.kaggle.com/datasets/ibriiee/video-games-sales-dataset-2022-updated-extra-feat?resource=download
+# File path
+V_Games <- "~/Desktop/Classes/Term 4/Project/Video_Games.csv"
+
+# Process data function with data type checks and conversions
+Process_data <- function(CvsF) {
+  data <- read.csv(CvsF)
+  return(data)
+}
+
+# Load data
+Game_data <- Process_data(V_Games)
+
+# Check structure of data
+str(Game_data)
+
+# Data munging
+Game_data$Year_of_Release <- as.numeric(as.character(Game_data$Year_of_Release))
+Game_data$User_Score <- as.numeric(as.character(Game_data$User_Score))
+
+# Check for NA values
+sum(is.na.data.frame(Game_data))
+
+# View dataset
+View(Game_data)
+
+# Custom descriptive function
+myDesc <- function(v, header ="Descriptive Statistics") {
+  M <- mean(v, na.rm = TRUE)
+  N <- min(v, na.rm = TRUE)
+  Me <- median(v, na.rm = TRUE)
+  S <- sd(v, na.rm = TRUE)
+  V <- var(v, na.rm = TRUE)
+  
+  cat("\n", header, "\n")
+  print(c(paste("Mean =", M), paste("Min =", N), paste("Median =", Me), paste("SD =", S), paste("Variance =", V)))
+}
+
+# Descriptive statistics for sales
+myDesc(Game_data$NA_Sales, header = "North America Sales Statistics")
+myDesc(Game_data$EU_Sales, header = "Europe Sales Statistics")
+myDesc(Game_data$JP_Sales, header = "Japan Sales Statistics")
+myDesc(Game_data$Other_Sales, header = "Other Sales Statistics")
+myDesc(Game_data$Global_Sales, header = "Global Sales Statistics")
+
+# Impute missing values
+Game_data <- na_interpolation(Game_data)
+
+# Grouping by publisher for total sales
+top_publishers <- Game_data %>%
+  group_by(Publisher) %>%
+  summarise(Total_Sales = sum(Global_Sales, na.rm = TRUE)) %>%
+  arrange(desc(Total_Sales)) %>%
+  slice_head(n = 10)
+
+# Filter dataset for top publishers
+filteredGAME_data <- Game_data %>%
+  filter(Publisher %in% top_publishers$Publisher)
+
+# Plot global sales by top publishers
+ggplot(filteredGAME_data, aes(x = Publisher, y = Global_Sales, fill = Publisher)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(
+    title = "Global Sales by Publishers (Top 10 Publishers)",
+    x = "Publisher",
+    y = "Global Sales"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Shiny app definition
+ui <- fluidPage(
+  titlePanel("Video Game Sales Analysis"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("rating_filter", 
+                  "Select Rating:",
+                  choices = c("All", unique(Game_data$Rating)),
+                  selected = "All"),
+      selectInput("genre_filter",
+                  "Select Genre:",
+                  choices = c("All", unique(Game_data$Genre)),
+                  selected = "All")
+    ),
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Bar Plot", plotOutput("barPlot")),
+        tabPanel("Box Plot", plotOutput("boxPlot"))
+      )
+    )
+  )
+)
+
+server <- function(input, output) {
+  # Reactive data based on filters
+  filtered_data <- reactive({
+    data <- Game_data
+    if (input$rating_filter != "All") {
+      data <- data[data$Rating == input$rating_filter, ]
+    }
+    if (input$genre_filter != "All") {
+      data <- data[data$Genre == input$genre_filter, ]
+    }
+    data
+  })
+  
+  # Bar Plot
+  output$barPlot <- renderPlot({
+    ggplot(filtered_data(), aes(x = Genre, y = Global_Sales, fill = Genre)) +
+      geom_bar(stat = "identity", position = "dodge") +
+      theme_minimal() +
+      labs(
+        title = "Global Sales by Genre",
+        x = "Genre",
+        y = "Total Sales"
+      ) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+  
+  # Box Plot
+  output$boxPlot <- renderPlot({
+    ggplot(filtered_data(), aes(x = Platform, y = Global_Sales, color = Platform)) +
+      geom_boxplot() +
+      labs(
+        title = "Global Sales by Platform",
+        x = "Platforms",
+        y = "Global Sales (in millions)"
+      ) +
+      theme_minimal()
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
+# Additional plots for sales
+salesBYgenre <- aggregate(Global_Sales ~ Genre, data = Game_data, sum)
+ggplot(salesBYgenre, aes(x = reorder(Genre, Global_Sales), y = Global_Sales)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Global Sales by Genre", x = "Genre", y = "Total Global Sales (millions)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+salesBYplatform <- aggregate(Global_Sales ~ Platform, data = Game_data, sum)
+ggplot(salesBYplatform, aes(x = reorder(Platform, Global_Sales), y = Global_Sales)) +
+  geom_bar(stat = "identity", fill = "purple") +
+  labs(title = "Global Sales by Platform", x = "Platform", y = "Global Sales (millions)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+salesBYdeveloper <- aggregate(Global_Sales ~ Developer, data = Game_data, sum)
+top_developers <- salesBYdeveloper[order(-salesBYdeveloper$Global_Sales), ][1:20, ]
+ggplot(top_developers, aes(x = reorder(Developer, Global_Sales), y = Global_Sales)) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+  labs(title = "Top 20 Developers by Global Sales", x = "Developer", y = "Global Sales (millions)") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Subsetting for games released 2012 to 2022
+RecentData <- Game_data[Game_data$Year_of_Release >= 2012 & Game_data$Year_of_Release <= 2022, ]
+Recent_SalesBYdeveloper <- aggregate(Global_Sales ~ Developer, data = RecentData, sum)
+Recent_top_developers <- Recent_SalesBYdeveloper[order(-Recent_SalesBYdeveloper$Global_Sales), ][1:20, ]
+ggplot(Recent_top_developers, aes(x = reorder(Developer, Global_Sales), y = Global_Sales)) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+  labs(title = "Top 20 Developers by Global Sales (2012–2022)", x = "Developer", y = "Global Sales (millions)") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+salesBYrating <- aggregate(Global_Sales ~ Rating, data = Game_data, sum)
+ggplot(salesBYrating, aes(x = Rating, y = Global_Sales)) +
+  geom_bar(stat = "identity", fill = "green") +
+  labs(title = "Global Sales by Rating", x = "Rating", y = "Global Sales (millions)")
+
+# Machine learning model
+set.seed(111)
+trainList <- createDataPartition(y = Game_data$Global_Sales, p = 0.80, list = FALSE)
+training_set <- Game_data[trainList, ]
+testing_set <- Game_data[-trainList, ]
+
+vgFit <- train(Global_Sales ~ Critic_Score + User_Score, data = training_set, method = "svmRadial", preProc = c("center", "scale"))
+
+# Linear modeling
+userScore_plot <- ggplot(Game_data) + geom_point(aes(x = User_Score, y = Global_Sales))
+criticScore_plot <- ggplot(Game_data) + geom_point(aes(x = Critic_Score, y = Global_Sales))
+
+UserLM <- lm(Global_Sales ~ User_Score, data = Game_data)
+summary(UserLM)
+
+CriticLM <- lm(Global_Sales ~ Critic_Score, data = Game_data)
+summary(CriticLM)
